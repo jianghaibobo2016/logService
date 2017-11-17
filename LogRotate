@@ -1,0 +1,259 @@
+#!/bin/sh
+##############################################################################
+#Copyright (c) 2017 Dsppa
+#Author : JHB	Version : V1.0	Date : 10/27/2017
+##############################################################################
+
+while read line;do  
+    eval "$line"  
+
+done < LogRotate.conf
+
+#Get the current time(year, month).
+present_year=`date "+%Y"`
+present_month=`date "+%m"`
+present_month=12
+
+
+#Set the abbreviation of month.
+month_recognition()
+{
+    case $present_month in
+        01)
+        month_eng=Jan
+        last_month=12
+        ;;
+        02)
+        month_eng=Feb
+        last_month=01
+        ;;
+        03)
+        month_eng=Mar
+        last_month=02
+        ;;
+        04)
+        month_eng=Apr
+        last_month=03
+        ;;
+        05)
+        month_eng=May
+        last_month=04
+        ;;
+        06)
+        month_eng=Jun
+        last_month=05
+        ;;
+        07)
+        month_eng=Jul
+        last_month=06
+        ;;
+        08)
+        month_eng=Aug
+        last_month=07
+        ;;
+        09)
+        month_eng=Sep
+        last_month=08
+        ;;
+        10)
+        month_eng=Oct
+        last_month=09
+        ;;
+        11)
+        month_eng=Nov
+        last_month=10
+        ;;
+        12)
+        month_eng=Dec
+        last_month=11
+        ;;
+        *)
+        echo
+        ;;
+    esac
+
+}
+
+
+#Delete old logs. $1 is route, $2 is last month log name.
+delete_logs()
+{
+    match_line=`ls -l $1"/"$2* | grep "_000020" -c`
+    if [ $match_line -le $keep_backups ];then
+        echo "Do not delete."
+    else
+        delete_num=`expr $match_line - $keep_backups`
+        delete_logname=`ls -l $1"/"$2* | awk '{print $9}' |  grep  -m $delete_num "_000020" `
+        `rm $delete_logname`
+    fi
+
+}
+
+
+### Rotate logs, and delete needless logs. 
+#$1 is route, $2 is flag of rotating into subdirectory or not.  
+logRotate()
+{
+    month_recognition
+    #Judge that files under the route have this month date or not.
+    ls -l $1 | awk '{print $6 }' | grep -w "$month_eng" > /dev/null
+    #if $? is 1 then rotate, and 0 no need to rotate.
+    if [ $? -eq 0 ];then
+        echo "No need to rotate!"
+    else 
+        echo "Begin to rotate!"
+        
+        for file in `ls $1`
+        do
+            if [ -f $1"/"$file ];then
+                if echo $file | grep "_000020" > /dev/null ;then
+                    echo hist_logname:$file > /dev/null
+                else
+                    #Put last month log file to be a old log file, 
+                    #and create a new log file to use.
+                    echo curr_logname:$file > /dev/null
+                    logname=${file%.log*}
+                    present_logname=${logname}"_0000"${present_year}${last_month}".log"
+                    `mv $1"/"$file $1"/"$present_logname`
+                    if  ls $1 | grep $file ;then
+                        `touch $1"/"${logname}"_tmp.log"`
+                        #Set permission according to configure file.
+                        `chmod $permission $1"/"${logname}"_tmp.log"`
+                    else    
+                        `touch $1"/"${logname}".log"`
+                        `chmod $permission $1"/"${logname}".log"`
+                    fi
+                    #Delete needless log files.
+                    delete_logs $1 $logname
+                fi
+            elif [ -d $1"/"$file ];then
+                #Enter subdirectory to rotate logs or not according to configure file.
+                if [ $2 == "yes" ];then
+                    echo "Enter to rotate."
+                    #Recur function.
+                    logRotate $1"/"$file $2
+                elif [ $2 == "no" ];then
+                    echo "Do not enter."
+                else
+                    echo "Error bad parameter of rotating into subdirectory!"
+                fi
+            else
+                #The file is not directory so rotate it use file method.
+                if echo $file | grep "_000020" > /dev/null ;then
+                    echo hist_logname:$file > /dev/null
+                else
+                    echo curr_logname:$file > /dev/null
+                    logname=${file%.log*}
+                    present_logname=${logname}"_0000"${present_year}${last_month}".log"
+                    `mv $1"/"$file $1"/"$present_logname`
+                    if  ls $1 | grep $file ;then
+                        `touch $1"/"${logname}"_tmp.log"`
+                        `chmod $permission $1"/"${logname}"_tmp.log"`
+                    else    
+                        `touch $1"/"${logname}".log"`
+                        `chmod $permission $1"/"${logname}".log"`
+                    fi
+                    delete_logs $1 $logname
+                fi
+            fi
+        done
+
+    fi
+}
+
+
+
+#Calculate the size of log catalog and compare that with maximum value according to configure file.
+#$1 is route, $2 is flag of rotating into subdirectory or not. $3 is maximum size set.
+limit_size()
+{
+    for file in `ls $1`
+    do
+        if [ -f $1"/"$file ];then
+            file_size=`ls -l $1"/"$file | awk '{print $5}'`
+            total_files_size=`expr $total_files_size + $file_size`
+        elif [ -d $1"/"$file ];then
+            if [ $2 == "yes" ];then
+                #A catalog occupies 4096 bytes.
+                total_files_size=`expr $total_files_size + 4096`
+                echo "Enter to calculate."
+                #Recur function.
+                limit_size $1"/"$file $2 $3
+            elif [ $2 == "no" ];then
+                total_files_size=`expr $total_files_size + 4096`
+                echo "Do not enter."
+            else
+                total_files_size=`expr $total_files_size + 4096`
+                echo "Error bad parameter of rotating into subdirectory!"
+            fi
+        else 
+            #The file is not directory so calculate it use file method.
+            file_size=`ls -l $1"/"$file | awk '{print $5}'`
+            total_files_size=`expr $total_files_size + $file_size`
+        fi
+    done
+
+    ##compare.
+    max_size=$3
+    num_size=` echo $max_size | tr -cd '[0-9]' `
+    unit=${max_size#*$num_size}
+    if [ $unit == "K" -o $unit == "k" ];then
+        byte_maximum=`expr $num_size \* 1024`
+    elif [ $unit == "M" -o $unit == "m" ];then
+        byte_maximum=`expr $num_size \* 1048576`
+    else
+        #error unit! Can not know this log directory size! Please check file LogRotate.conf.
+        return 1
+    fi
+
+    if [ $total_files_size -ge $byte_maximum ];then
+        #Warning the log file size exceed setting.
+        return 2
+    fi
+}
+
+
+
+
+#Get catalogs number and start looping to rotate. 
+catalog_lines=`grep "include_" -c < LogRotate.conf`
+for i in $(seq $catalog_lines)
+do
+    #get index.
+    catalog_names=`grep -m $i "include_" < LogRotate.conf` 
+    catalog_name=${catalog_names##*=}
+    index_0=${catalog_names##*include_}
+    index=${index_0%%=*}
+    ##get attribute name by index.
+    ris_0="rotate_in_subdirectory_"$index
+    mls_0="maximum_logs_"$index
+
+    ####get attribute.
+    if grep "$ris_0" < LogRotate.conf >/dev/null ;then
+        eval ris=\$$ris_0
+    else
+        ris=${rotate_in_subdirectory_default##*=}
+    fi
+
+    if grep "$mls_0" < LogRotate.conf >/dev/null ;then
+        eval mls=\$$mls_0
+    else
+        mls=${maximum_logs_default##*=}
+    fi
+    #Start rotating logs.
+    logRotate $catalog_name $ris
+
+    #global variable. Calculate log files size.
+    total_files_size=0
+    limit_size $catalog_name $ris $mls
+    #Judge the return value to print info.
+    ret=$?
+    if [ $ret -eq 1 ];then
+        echo "Error unit! Can not know this log directory size! Please check file LogRotate.conf."
+        return 1
+    elif [ $ret -eq 2 ];then
+        echo "Warning the log file size exceed setting."
+    fi
+    # echo $total_files_size  
+
+done
